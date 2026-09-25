@@ -31,7 +31,11 @@ The Express API lives in `backend/src/server.ts` and includes:
 - Doctors, appointments, reminders, medical records, and admin stats endpoints
 - A safety-bounded AI health guidance endpoint that does not diagnose or prescribe
 - Helmet, CORS, rate limiting, Zod validation, bcrypt password hashing, and
-  optional MongoDB connection
+  required MongoDB persistence
+- Automatic indexes and startup seed accounts for demo doctors and an admin
+- Doctor appointment status updates, patient clinical notes, admin user
+  management, notifications, reminder deletion, record filtering, and a
+  cloud-storage-ready upload endpoint
 
 The authenticated frontend now has working routes for:
 
@@ -41,21 +45,17 @@ The authenticated frontend now has working routes for:
 - `/patient/reminders` medication/habit creation and active/paused state
 - `/patient/assistant` safety-bounded health education chat
 - `/patient/help` privacy and support guidance
-- Doctor and admin overview shells when a user has those roles
+- Doctor and admin workspaces when a user has those roles
 
-Copy `backend/.env.example` to `backend/.env` and set `JWT_SECRET`. `MONGODB_URI` is accepted
-for database connectivity and the repository's persistence layer can be
-extended from the typed models; the current feature routes intentionally use an
-in-memory store for deterministic local development. Run it with
-`npm run server:dev`; compile it with
+Copy `backend/.env.example` to `backend/.env`, set `JWT_SECRET` and a complete
+`MONGODB_URI`, and optionally set `GEMINI_API_KEY` for provider-backed AI
+responses. Run it with `npm run server:dev`; compile it with
 `npm run server:build` and start the compiled API with `npm run server:start`.
 
 ## Production checklist
 
 Before deploying, configure a real `MONGODB_URI`, a 32+ character random
 `JWT_SECRET`, `CLIENT_ORIGIN` for the deployed frontend, `COOKIE_SECURE=true`,
-and a real file storage/provider integration for medical uploads. The current
-development fallback is intentionally in-memory and should not be used for
-production persistence. The AI route is a safe provider seam; connect it to a
-reviewed healthcare information provider and retain the non-diagnostic
-guardrails before enabling it in production.
+and a real file storage/provider integration for medical uploads. The API
+fails fast without MongoDB rather than silently losing health data. Gemini is
+used when configured, with non-diagnostic guardrails retained in the fallback.
