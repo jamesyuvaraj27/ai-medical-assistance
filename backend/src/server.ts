@@ -15,9 +15,28 @@ const jwtSecret = process.env.JWT_SECRET ?? 'development-only-change-me'
 const cookieName = 'carely_token'
 const isProduction = process.env.NODE_ENV === 'production'
 const secureCookie = process.env.COOKIE_SECURE === 'true' || isProduction
+const cookieSameSite = (process.env.COOKIE_SAMESITE as 'none' | 'lax' | 'strict') || (isProduction ? 'none' : 'lax')
+
+if (isProduction) {
+  app.set('trust proxy', 1)
+}
+
+const clientOriginEnv = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173'
+const allowedOrigins = clientOriginEnv.split(',').map(s => s.trim())
 
 app.use(helmet())
-app.use(cors({ origin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173', credentials: true }))
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+        callback(null, true)
+      } else {
+        callback(null, true)
+      }
+    },
+    credentials: true,
+  })
+)
 app.use(express.json({ limit: '2mb' }))
 app.use(cookieParser())
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: true }))
@@ -76,7 +95,7 @@ app.post('/api/auth/register', asyncHandler(async (req, res) => {
   if (exists) return res.status(409).json({ message: 'An account with that email already exists' })
   const user: User = { id: id(), ...input, role: 'patient', password: await bcrypt.hash(input.password, 12), createdAt: new Date() }
   memory.users.push(user)
-  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: 'lax', secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
+  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: cookieSameSite, secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
   res.status(201).json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } })
 }))
 
@@ -84,11 +103,14 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
   const input = loginSchema.parse(req.body)
   const user = memory.users.find(item => item.email === input.email)
   if (!user || !(await bcrypt.compare(input.password, user.password))) return res.status(401).json({ message: 'Invalid email or password' })
-  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: 'lax', secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
+  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: cookieSameSite, secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
   res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } })
 }))
 
-app.post('/api/auth/logout', (_req, res) => { res.clearCookie(cookieName); res.status(204).end() })
+app.post('/api/auth/logout', (_req, res) => {
+  res.clearCookie(cookieName, { httpOnly: true, sameSite: cookieSameSite, secure: secureCookie })
+  res.status(204).end()
+})
 app.get('/api/auth/me', auth(), (req, res) => {
   const user = memory.users.find(item => item.id === req.user!.id)
   if (!user) return res.status(404).json({ message: 'User not found' })
