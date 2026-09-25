@@ -24,7 +24,7 @@ without changing the route structure.
 
 ## API
 
-The Express API lives in `server/src/server.ts` and includes:
+The Express API lives in `backend/src/server.ts` and includes:
 
 - Secure cookie JWT registration, login, logout, and session lookup
 - Role-aware patient, doctor, and admin authorization
@@ -33,7 +33,7 @@ The Express API lives in `server/src/server.ts` and includes:
 - Helmet, CORS, rate limiting, Zod validation, bcrypt password hashing, and
   optional MongoDB connection
 
-Copy `.env.example` to `.env` and set `JWT_SECRET`. `MONGODB_URI` is accepted
+Copy `backend/.env.example` to `backend/.env` and set `JWT_SECRET`. `MONGODB_URI` is accepted
 for database connectivity and the repository's persistence layer can be
 extended from the typed models; the current feature routes intentionally use an
 in-memory store for deterministic local development. Run it with

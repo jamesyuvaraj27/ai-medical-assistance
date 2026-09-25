@@ -3,43 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "workspaces": ["frontend", "backend"],
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "server:dev": "tsx server/src/server.ts",
-    "server:build": "tsc -p server/tsconfig.json",
-    "server:start": "node server/dist/server.js"
-  },
-  "dependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "framer-motion": "^11.15.0",
-    "lucide-react": "^0.468.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-router-dom": "^7.1.1",
-    "typescript": "~5.7.2",
-    "vite": "^6.0.5",
-    "bcryptjs": "^3.0.2",
-    "cookie-parser": "^1.4.7",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "express-rate-limit": "^7.5.0",
-    "helmet": "^8.0.0",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.9.5",
-    "zod": "^3.24.1"
-  },
-  "devDependencies": {
-    "@types/node": "^26.6.2",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@types/bcryptjs": "^2.4.6",
-    "@types/cookie-parser": "^1.4.8",
-    "@types/cors": "^2.8.17",
-    "@types/express": "^5.0.0",
-    "@types/jsonwebtoken": "^9.0.7",
-    "tsx": "^4.19.2"
+    "dev": "npm run dev --workspace frontend",
+    "build": "npm run build --workspace frontend",
+    "preview": "npm run preview --workspace frontend",
+    "server:dev": "npm run dev --workspace backend",
+    "server:build": "npm run build --workspace backend",
+    "server:start": "npm run start --workspace backend"
   }
 }
