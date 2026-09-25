@@ -14,6 +14,7 @@ const port = Number(process.env.PORT ?? 4000)
 const jwtSecret = process.env.JWT_SECRET ?? 'development-only-change-me'
 const cookieName = 'carely_token'
 const isProduction = process.env.NODE_ENV === 'production'
+const secureCookie = process.env.COOKIE_SECURE === 'true' || isProduction
 
 app.use(helmet())
 app.use(cors({ origin: process.env.CLIENT_ORIGIN ?? 'http://localhost:5173', credentials: true }))
@@ -62,7 +63,7 @@ function auth(requiredRoles?: Role[]) {
   }
 }
 
-const registerSchema = z.object({ name: z.string().trim().min(2).max(80), email: z.string().email().transform(value => value.toLowerCase()), password: z.string().min(8).max(72), role: z.enum(['patient', 'doctor', 'admin']).default('patient') })
+const registerSchema = z.object({ name: z.string().trim().min(2).max(80), email: z.string().email().transform(value => value.toLowerCase()), password: z.string().min(8).max(72) })
 const loginSchema = z.object({ email: z.string().email().transform(value => value.toLowerCase()), password: z.string().min(1) })
 const appointmentSchema = z.object({ doctorId: z.string().min(1), date: z.string().min(1), slot: z.string().min(1), notes: z.string().max(500).optional() })
 const reminderSchema = z.object({ medicineName: z.string().min(1).max(120), dosage: z.string().min(1).max(80), schedule: z.string().min(1).max(80) })
@@ -73,9 +74,9 @@ app.post('/api/auth/register', asyncHandler(async (req, res) => {
   const input = registerSchema.parse(req.body)
   const exists = memory.users.find(user => user.email === input.email)
   if (exists) return res.status(409).json({ message: 'An account with that email already exists' })
-  const user: User = { id: id(), ...input, password: await bcrypt.hash(input.password, 12), createdAt: new Date() }
+  const user: User = { id: id(), ...input, role: 'patient', password: await bcrypt.hash(input.password, 12), createdAt: new Date() }
   memory.users.push(user)
-  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: 'lax', secure: isProduction, maxAge: 7 * 24 * 60 * 60 * 1000 })
+  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: 'lax', secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
   res.status(201).json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } })
 }))
 
@@ -83,7 +84,7 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
   const input = loginSchema.parse(req.body)
   const user = memory.users.find(item => item.email === input.email)
   if (!user || !(await bcrypt.compare(input.password, user.password))) return res.status(401).json({ message: 'Invalid email or password' })
-  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: 'lax', secure: isProduction, maxAge: 7 * 24 * 60 * 60 * 1000 })
+  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: 'lax', secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
   res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } })
 }))
 
@@ -152,10 +153,16 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 })
 
 async function start() {
+  if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) throw new Error('JWT_SECRET must be set to at least 32 characters in production')
+  if (isProduction && !process.env.MONGODB_URI) throw new Error('MONGODB_URI must be configured in production')
   if (process.env.MONGODB_URI) {
     try { await mongoose.connect(process.env.MONGODB_URI); console.log('Connected to MongoDB') }
     catch (error) { console.error('MongoDB connection failed; using memory store', error) }
-  } else console.warn('MONGODB_URI is not set; using memory store')
+  } else {
+    const demoDoctor: User = { id: id(), name: 'Dr. Amara Patel', email: 'amara.patel@carely.example', password: await bcrypt.hash('development-only-password', 12), role: 'doctor', createdAt: new Date() }
+    memory.users.push(demoDoctor)
+    console.warn('MONGODB_URI is not set; using memory store with a development-only demo doctor')
+  }
   app.listen(port, () => console.log(`Carely API listening on http://localhost:${port}`))
 }
 
