@@ -15,26 +15,49 @@ const jwtSecret = process.env.JWT_SECRET ?? 'development-only-change-me'
 const cookieName = 'carely_token'
 const isProduction = process.env.NODE_ENV === 'production'
 const secureCookie = process.env.COOKIE_SECURE === 'true' || isProduction
-const cookieSameSite = (process.env.COOKIE_SAMESITE as 'none' | 'lax' | 'strict') || (isProduction ? 'none' : 'lax')
+const cookieSameSite = (process.env.COOKIE_SAMESITE as 'none' | 'lax' | 'strict') || (secureCookie ? 'none' : 'lax')
 
 if (isProduction) {
   app.set('trust proxy', 1)
 }
 
-const clientOriginEnv = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173'
-const allowedOrigins = clientOriginEnv.split(',').map(s => s.trim())
+const defaultOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:4173',
+  'http://127.0.0.1:5173',
+  'https://ai-medical-assistance-frontend.vercel.app',
+]
+
+const envOrigins = (process.env.CLIENT_ORIGIN ?? '')
+  .split(',')
+  .map(o => o.trim().replace(/\/$/, ''))
+  .filter(Boolean)
+
+const allowedOrigins = Array.from(new Set([...defaultOrigins, ...envOrigins]))
+
+function isAllowedOrigin(origin: string): boolean {
+  const clean = origin.replace(/\/$/, '')
+  if (allowedOrigins.includes(clean)) return true
+  if (/^https:\/\/([a-z0-9-]+)\.vercel\.app$/i.test(clean)) return true
+  if (/^http:\/\/localhost(:\d+)?$/i.test(clean)) return true
+  if (/^http:\/\/127\.0\.0\.1(:\d+)?$/i.test(clean)) return true
+  return false
+}
 
 app.use(helmet())
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      if (!origin || isAllowedOrigin(origin)) {
         callback(null, true)
       } else {
-        callback(null, true)
+        callback(null, false)
       }
     },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
   })
 )
 app.use(express.json({ limit: '2mb' }))

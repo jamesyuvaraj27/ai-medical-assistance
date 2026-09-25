@@ -1,4 +1,8 @@
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api'
+const defaultApiUrl = import.meta.env.PROD
+  ? 'https://ai-medical-assistance-hoyu.onrender.com/api'
+  : 'http://localhost:4000/api'
+
+const API_URL = (import.meta.env.VITE_API_URL || defaultApiUrl).replace(/\/$/, '')
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
