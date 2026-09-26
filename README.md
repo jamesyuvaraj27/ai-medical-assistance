@@ -41,7 +41,7 @@ Healthcare today is fragmented, intimidating, and overwhelming. Patients face co
 **Carely** was created to bridge this gap with a **calm, patient-first digital ecosystem**:
 - **Demystify Medical Information:** Translate complex diagnostic notes, lab findings, and medication schedules into plain, accessible language.
 - **Support, Never Replace, Clinicians:** Deliver responsible AI health education that prepares patients for doctor visits without attempting autonomous diagnosis or prescription.
-- **Centralize Health Management:** Unify appointment booking, medical history storage, and daily medication adherence reminders into one accessible dashboard.
+- **Centralize Health Management:** Unify appointment booking, medical history storage, digital prescriptions, and daily medication adherence reminders into one accessible dashboard.
 - **Empower All Stakeholders:** Offer tailored experiences for Patients, Clinicians (Doctors), and Platform Administrators.
 
 ---
@@ -58,11 +58,11 @@ Healthcare today is fragmented, intimidating, and overwhelming. Patients face co
 ### 2. For Doctors & Care Teams
 - 🩺 **Streamlined Consultations:** Patients arrive better informed, with organized symptom histories and structured questions.
 - 🗓️ **Live Schedule Visibility:** Instant oversight of upcoming patient consultations and appointment states (`scheduled`, `completed`, `cancelled`).
-- 📋 **Integrated Patient History:** Quick reference to patient-uploaded lab results and medical records.
+- 📋 **Integrated Patient History & Prescriptions:** Quick reference to patient-uploaded lab results, digital prescription issuance, and clinical note management.
 
 ### 3. For Healthcare Administrators
 - 📊 **Operational Analytics:** Real-time metrics on total registered patients, active doctors, scheduled visits, and uploaded medical records.
-- 🔐 **Role-Based Access Control (RBAC):** Strict partition between patient records, clinician tools, and system administration.
+- 🔐 **Role-Based Access Control (RBAC):** Strict partition between patient records, clinician tools, and system administration with live role modification.
 
 ---
 
@@ -77,40 +77,13 @@ graph TD
     Client[React 18 + Vite + TypeScript Frontend]
     API[Express + TypeScript API Gateway]
     Auth[JWT HttpOnly Cookie Auth]
-    DB[(MongoDB Database / In-Memory Seam)]
-    AI[Safety-Bounded AI Assistant Engine]
+    DB[(MongoDB Atlas Database)]
+    AI[Google Gemini 2.0 / Safety-Bounded AI Engine]
 
     Client -->|REST + Credentials| API
     API --> Auth
     API --> DB
     API --> AI
-```
-
-### End-to-End Workflow & Data Flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Patient as Patient / User
-    participant Frontend as Carely React Client
-    participant Backend as Express REST API
-    participant DB as MongoDB / Storage
-
-    Patient->>Frontend: Register or Log In
-    Frontend->>Backend: POST /api/auth/login
-    Backend->>Backend: Verify bcrypt hash & sign JWT
-    Backend-->>Frontend: Set HttpOnly Cookie (carely_token) + User JSON
-
-    Patient->>Frontend: Ask AI Assistant about lab report / symptoms
-    Frontend->>Backend: POST /api/ai/chat (with JWT Cookie)
-    Backend->>Backend: Safety validation & non-diagnostic prompt processing
-    Backend-->>Frontend: Plain-language health guidance & visit preparation tips
-
-    Patient->>Frontend: Book Appointment / Add Reminder / Save Record
-    Frontend->>Backend: POST /api/appointments or /api/reminders or /api/records
-    Backend->>DB: Validate with Zod schema & persist
-    Backend-->>Frontend: Updated Entity JSON (201 Created)
-    Frontend-->>Patient: Instant UI update with Framer Motion animations
 ```
 
 ### Safety-Bounded AI Seam
@@ -132,6 +105,11 @@ Carely implements strict ethical and clinical guardrails in its AI layer:
 | **Appointments Manager** | Search care team clinicians, select date and consultation slot, view scheduled appointments, and cancel visits. | Patient, Doctor |
 | **Medication Reminders** | Add prescription/supplement reminders with dosage and schedules; toggle active/paused statuses. | Patient |
 | **Medical Records Hub** | Organize lab results, imaging, visit notes, and attach secure file URLs with upload date tracking. | Patient, Doctor |
+| **Digital Prescriptions** | Issue medications, specify dosage and schedules, review active patient treatments. | Patient, Doctor, Admin |
+| **Patient Directory** | Clinician roster of all registered patients under care with visit metrics. | Doctor, Admin |
+| **User Management** | Account control table to assign and modify roles (`patient`, `doctor`, `admin`) and remove accounts. | Admin |
+| **Notifications Hub** | Real-time alerts for booking confirmations, cancellations, medication reminders, and system notes. | Authenticated Users |
+| **Help & Privacy Center** | Emergency guidance (911/112), interactive FAQ accordion, HIPAA data commitments, support contact form. | Authenticated Users |
 | **AI Health Assistant** | Plain-language health guidance, report translation, symptom tracking advice, and doctor visit prep. | Authenticated Users |
 | **Doctor Workspace** | View assigned appointments, consult schedule, access records, and review consultation lists. | Doctor |
 | **Admin Operations** | System-wide statistics (registered patients, clinician count, total visits, total records). | Admin |
@@ -150,10 +128,11 @@ Carely implements strict ethical and clinical guardrails in its AI layer:
 
 ### Backend
 - **Runtime & Framework:** Node.js (ES Modules), Express 4 with TypeScript (`tsx` runtime)
+- **Database:** MongoDB & Mongoose schemas with indexes, timestamps, and validation
 - **Security:** Helmet (HTTP header security), CORS with origin allowlisting, Express Rate Limit
 - **Authentication:** JSON Web Tokens (JWT) stored in `HttpOnly`, `SameSite`, `Secure` cookies, `bcryptjs` password hashing (salt rounds: 12)
 - **Validation:** Zod schemas for all payload validation
-- **Persistence:** Mongoose / MongoDB connection with deterministic in-memory fallback store
+- **AI Integration:** Google Gemini 2.0 Flash API with fallback to structured clinical guidance
 
 ---
 
@@ -162,13 +141,11 @@ Carely implements strict ethical and clinical guardrails in its AI layer:
 ### Prerequisites
 - **Node.js:** v18.0.0 or higher ([Download Node.js](https://nodejs.org/))
 - **npm:** v9.0.0 or higher
-- **MongoDB:** (Optional for local dev, required for production) Local MongoDB instance or MongoDB Atlas URI
+- **MongoDB:** MongoDB Atlas connection URI or local MongoDB instance
 
 ---
 
 ### 1. Clone & Install Dependencies
-
-Clone the repository and install dependencies across all workspace packages:
 
 ```bash
 # Clone the repository
@@ -184,28 +161,25 @@ npm install
 ### 2. Environment Configuration
 
 #### Backend Configuration
-Copy the sample environment file in `backend/`:
+Copy `backend/.env.example` to `backend/.env`:
 
 ```bash
 cp backend/.env.example backend/.env
 ```
 
-Edit `backend/.env` with your settings:
+Edit `backend/.env`:
 
 ```env
 PORT=4000
-# Comma-separated allowed frontend origins
 CLIENT_ORIGIN=http://localhost:5173,http://localhost:3000
-# Long random secret (minimum 32 characters in production)
-JWT_SECRET=super-secret-carely-development-key-32-chars-long
-# MongoDB connection URI (optional in local dev; falls back to in-memory store)
+JWT_SECRET=your-random-32-character-secret-key-here
 MONGODB_URI=mongodb+srv://<username>:<password>@cluster.mongodb.net/carely?retryWrites=true&w=majority
-# Set to true when running under HTTPS
+GEMINI_API_KEY=your-gemini-api-key-optional
 COOKIE_SECURE=false
 ```
 
 #### Frontend Configuration
-Copy the sample environment file in `frontend/`:
+Copy `frontend/.env.example` to `frontend/.env`:
 
 ```bash
 cp frontend/.env.example frontend/.env
@@ -214,7 +188,6 @@ cp frontend/.env.example frontend/.env
 Edit `frontend/.env`:
 
 ```env
-# URL pointing to the Express API
 VITE_API_URL=http://localhost:4000/api
 ```
 
@@ -222,142 +195,16 @@ VITE_API_URL=http://localhost:4000/api
 
 ### 3. Running Locally
 
-You can run both frontend and backend using root npm scripts:
-
-#### Option A: Run Both Simultaneously (Separate Terminals)
-
-**Terminal 1 — Backend Server:**
 ```bash
+# Start backend API (Terminal 1)
 npm run server:dev
-```
-*API will start at `http://localhost:4000`*
 
-**Terminal 2 — Frontend App:**
-```bash
+# Start frontend application (Terminal 2)
 npm run dev
 ```
-*Frontend will start at `http://localhost:5173`*
-
-#### Option B: Individual Workspace Commands
-
-```bash
-# Backend only
-npm run dev --workspace backend
-
-# Frontend only
-npm run dev --workspace frontend
-```
-
----
-
-## 📖 Step-by-Step Usage Guide
-
-### 1. Creating an Account & Logging In
-1. Open `http://localhost:5173` in your browser.
-2. Click **Get started** or navigate to `/register`.
-3. Enter your Full Name, Email, and Password (minimum 8 characters).
-4. Click **Create my account** to be automatically authenticated and redirected to `/patient`.
-
-> **Note for Testing Demo Doctor:** When running in local development mode with the in-memory fallback, a pre-seeded demo doctor account is available:
-> - **Email:** `amara.patel@carely.example`
-> - **Password:** `development-only-password`
-
-### 2. Booking a Doctor Appointment
-1. From the sidebar, navigate to **Appointments** (`/patient/appointments`).
-2. Select your clinician from the dropdown list.
-3. Choose a preferred date and time slot (`10:00 AM`, `2:00 PM`, `4:30 PM`).
-4. Click **Request appointment**. The appointment will appear in your appointments list.
-5. To cancel, click the **Cancel** button next to any scheduled visit.
-
-### 3. Adding Medication & Habit Reminders
-1. Navigate to **Reminders** (`/patient/reminders`).
-2. Enter the medicine/supplement name (e.g., *Vitamin D3*), dosage (*1000 IU*), and schedule time (*8:00 AM*).
-3. Click **Add reminder**.
-4. Use the **Active / Paused** toggle button to adjust reminder states.
-
-### 4. Uploading Medical Records
-1. Navigate to **Medical records** (`/patient/records`).
-2. Provide a record title (*Annual Blood Panel*), category (*Lab result, Imaging, Prescription, Visit note*), and an optional secure document URL.
-3. Click **Save record** to store it in your health story.
-
-### 5. Chatting with the AI Health Assistant
-1. Navigate to **AI assistant** (`/patient/assistant`).
-2. Type a health-related question, symptom description, or request for lab report explanation.
-3. Click **Ask Carely** to receive safety-bounded, plain-language guidance and consultation preparation tips.
-
----
-
-## 📡 API Reference
-
-All protected endpoints require the `carely_token` HttpOnly cookie issued upon successful login or registration.
-
-### 🔐 Authentication
-
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/auth/register` | Public | Register new patient account |
-| `POST` | `/api/auth/login` | Public | Authenticate user & issue JWT cookie |
-| `POST` | `/api/auth/logout` | Authenticated | Clear session cookie |
-| `GET` | `/api/auth/me` | Authenticated | Fetch current authenticated session |
-
-### 🩺 Clinicians & Appointments
-
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/doctors` | Public | List all registered doctors |
-| `GET` | `/api/appointments` | Patient / Doctor | List user's appointments |
-| `POST` | `/api/appointments` | Patient | Request a new appointment |
-| `PATCH` | `/api/appointments/:id/cancel` | Patient / Doctor | Cancel a scheduled appointment |
-
-### ⏰ Reminders
-
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/reminders` | Patient | Retrieve all medication reminders |
-| `POST` | `/api/reminders` | Patient | Create a new reminder |
-| `PATCH` | `/api/reminders/:id` | Patient | Toggle reminder active/paused state |
-
-### 📁 Medical Records
-
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `GET` | `/api/records` | Patient / Doctor | Retrieve medical records |
-| `POST` | `/api/records` | Patient | Save a new medical record entry |
-
-### 🤖 AI Assistant & Platform
-
-| Method | Endpoint | Access | Description |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/ai/chat` | Authenticated | Receive safety-bounded health guidance |
-| `GET` | `/api/admin/stats` | Admin | Fetch system analytics and counts |
-| `GET` | `/api/health` | Public | Service health & database connectivity check |
-
----
-
-## 🛡️ Security, Privacy & Compliance
-
-- **HttpOnly Cookies:** JWT tokens are stored in `HttpOnly`, `SameSite=None/Lax` cookies to prevent Cross-Site Scripting (XSS) token theft.
-- **Password Security:** Passwords hashed with `bcryptjs` using 12 salt rounds before storage.
-- **Input Sanitization:** All request payloads are strictly validated using `Zod` schemas.
-- **Security Headers:** `helmet` middleware sets secure HTTP headers (HSTS, CSP, X-Frame-Options).
-- **Rate Limiting:** Protection against brute force and DoS attacks (300 requests / 15-minute window).
-- **CORS Allowlist:** Origin verification restricts API access to authorized frontend domains.
-
----
-
-## 🚢 Production Deployment Checklist
-
-When deploying Carely to production environments (e.g., Render, Railway, AWS, Vercel):
-
-- [ ] **Database Persistence:** Configure a production `MONGODB_URI` cluster (e.g. MongoDB Atlas) and wire Mongoose database queries.
-- [ ] **Secret Management:** Generate a cryptographically secure `JWT_SECRET` (at least 32 random characters).
-- [ ] **Cookie Security:** Set `COOKIE_SECURE=true` and configure `COOKIE_SAMESITE=none` (if frontend and backend are hosted on separate domains under HTTPS).
-- [ ] **Origin Allowlist:** Set `CLIENT_ORIGIN` to the exact production frontend URL(s).
-- [ ] **AI Provider Integration:** Connect `/api/ai/chat` to a production LLM API (Google Gemini, OpenAI, or Anthropic) with health-domain system prompts and safety filters.
-- [ ] **File Storage:** Integrate Amazon S3, Google Cloud Storage, or Cloudinary for encrypted medical document and lab report uploads.
 
 ---
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](LICENSE).

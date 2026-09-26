@@ -6,8 +6,83 @@ import express, { NextFunction, Request, Response } from 'express'
 import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
 import jwt from 'jsonwebtoken'
-import mongoose, { Schema } from 'mongoose'
+import mongoose, { Document, Schema, Types } from 'mongoose'
 import { z } from 'zod'
+
+type Role = 'patient' | 'doctor' | 'admin'
+type AppointmentStatus = 'scheduled' | 'cancelled' | 'completed'
+type AuthUser = { id: string; role: Role }
+
+interface UserDocument extends Document { _id: Types.ObjectId; name: string; email: string; password: string; role: Role; specialty?: string; avatarUrl?: string; createdAt: Date }
+interface AppointmentDocument extends Document { _id: Types.ObjectId; patientId: Types.ObjectId; doctorId: Types.ObjectId; date: string; slot: string; status: AppointmentStatus; notes?: string; createdAt: Date; updatedAt: Date }
+interface ReminderDocument extends Document { _id: Types.ObjectId; patientId: Types.ObjectId; medicineName: string; dosage: string; schedule: string; active: boolean; createdAt: Date; updatedAt: Date }
+interface RecordDocument extends Document { _id: Types.ObjectId; patientId: Types.ObjectId; title: string; reportType: string; fileUrl?: string; summary?: string; uploadDate: Date; createdAt: Date; updatedAt: Date }
+interface PrescriptionDocument extends Document { _id: Types.ObjectId; doctorId: Types.ObjectId; doctorName: string; patientId: Types.ObjectId; patientName: string; medicineName: string; dosage: string; frequency: string; duration: string; instructions?: string; date: string; status: 'active' | 'completed'; createdAt: Date; updatedAt: Date }
+interface NotificationDocument extends Document { _id: Types.ObjectId; userId: Types.ObjectId; title: string; message: string; type: 'appointment' | 'medication' | 'system'; read: boolean; createdAt: Date; updatedAt: Date }
+
+const userSchema = new Schema<UserDocument>({
+  name: { type: String, required: true, trim: true, maxlength: 80 },
+  email: { type: String, required: true, unique: true, lowercase: true, index: true },
+  password: { type: String, required: true, select: false },
+  role: { type: String, enum: ['patient', 'doctor', 'admin'], required: true, default: 'patient', index: true },
+  specialty: { type: String, trim: true, maxlength: 100 },
+  avatarUrl: { type: String, trim: true },
+}, { timestamps: true })
+
+const appointmentSchema = new Schema<AppointmentDocument>({
+  patientId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  doctorId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  date: { type: String, required: true, index: true },
+  slot: { type: String, required: true },
+  status: { type: String, enum: ['scheduled', 'cancelled', 'completed'], required: true, default: 'scheduled', index: true },
+  notes: { type: String, maxlength: 1000 },
+}, { timestamps: true })
+
+const reminderSchema = new Schema<ReminderDocument>({
+  patientId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  medicineName: { type: String, required: true, maxlength: 120 },
+  dosage: { type: String, required: true, maxlength: 80 },
+  schedule: { type: String, required: true, maxlength: 80 },
+  active: { type: Boolean, default: true, index: true },
+}, { timestamps: true })
+
+const recordSchema = new Schema<RecordDocument>({
+  patientId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  title: { type: String, required: true, maxlength: 120 },
+  reportType: { type: String, required: true, index: true },
+  fileUrl: String,
+  summary: { type: String, maxlength: 5000 },
+  uploadDate: { type: Date, default: Date.now },
+}, { timestamps: true })
+
+const prescriptionSchema = new Schema<PrescriptionDocument>({
+  doctorId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  doctorName: { type: String, required: true },
+  patientId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  patientName: { type: String, required: true },
+  medicineName: { type: String, required: true, maxlength: 120 },
+  dosage: { type: String, required: true, maxlength: 80 },
+  frequency: { type: String, required: true, maxlength: 80 },
+  duration: { type: String, required: true, maxlength: 80 },
+  instructions: { type: String, maxlength: 500 },
+  date: { type: String, required: true },
+  status: { type: String, enum: ['active', 'completed'], default: 'active', index: true },
+}, { timestamps: true })
+
+const notificationSchema = new Schema<NotificationDocument>({
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  title: { type: String, required: true, maxlength: 120 },
+  message: { type: String, required: true, maxlength: 500 },
+  type: { type: String, enum: ['appointment', 'medication', 'system'], default: 'system', index: true },
+  read: { type: Boolean, default: false, index: true },
+}, { timestamps: true })
+
+const UserModel = mongoose.models.User || mongoose.model<UserDocument>('User', userSchema)
+const AppointmentModel = mongoose.models.Appointment || mongoose.model<AppointmentDocument>('Appointment', appointmentSchema)
+const ReminderModel = mongoose.models.Reminder || mongoose.model<ReminderDocument>('Reminder', reminderSchema)
+const MedicalRecordModel = mongoose.models.MedicalRecord || mongoose.model<RecordDocument>('MedicalRecord', recordSchema)
+const PrescriptionModel = mongoose.models.Prescription || mongoose.model<PrescriptionDocument>('Prescription', prescriptionSchema)
+const NotificationModel = mongoose.models.Notification || mongoose.model<NotificationDocument>('Notification', notificationSchema)
 
 const app = express()
 const port = Number(process.env.PORT ?? 4000)
@@ -15,11 +90,9 @@ const jwtSecret = process.env.JWT_SECRET ?? 'development-only-change-me'
 const cookieName = 'carely_token'
 const isProduction = process.env.NODE_ENV === 'production'
 const secureCookie = process.env.COOKIE_SECURE === 'true' || isProduction
-const cookieSameSite = (process.env.COOKIE_SAMESITE as 'none' | 'lax' | 'strict') || (secureCookie ? 'none' : 'lax')
+const sameSite = (process.env.COOKIE_SAMESITE as 'none' | 'lax' | 'strict') ?? (secureCookie ? 'none' : 'lax')
 
-if (isProduction) {
-  app.set('trust proxy', 1)
-}
+if (isProduction) app.set('trust proxy', 1)
 
 const defaultOrigins = [
   'http://localhost:5173',
@@ -28,32 +101,19 @@ const defaultOrigins = [
   'http://127.0.0.1:5173',
   'https://ai-medical-assistance-frontend.vercel.app',
 ]
-
-const envOrigins = (process.env.CLIENT_ORIGIN ?? '')
-  .split(',')
-  .map(o => o.trim().replace(/\/$/, ''))
-  .filter(Boolean)
-
+const envOrigins = (process.env.CLIENT_ORIGIN ?? '').split(',').map(v => v.trim().replace(/\/$/, '')).filter(Boolean)
 const allowedOrigins = Array.from(new Set([...defaultOrigins, ...envOrigins]))
-
-function isAllowedOrigin(origin: string): boolean {
-  const clean = origin.replace(/\/$/, '')
-  if (allowedOrigins.includes(clean)) return true
-  if (/^https:\/\/([a-z0-9-]+)\.vercel\.app$/i.test(clean)) return true
-  if (/^http:\/\/localhost(:\d+)?$/i.test(clean)) return true
-  if (/^http:\/\/127\.0\.0\.1(:\d+)?$/i.test(clean)) return true
-  return false
-}
 
 app.use(helmet())
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || isAllowedOrigin(origin)) {
-        callback(null, true)
-      } else {
-        callback(null, false)
+      if (!origin) return callback(null, true)
+      const clean = origin.replace(/\/$/, '')
+      if (allowedOrigins.includes(clean) || /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(clean) || /^http:\/\/localhost(:\d+)?$/i.test(clean) || /^http:\/\/127\.0\.0\.1(:\d+)?$/i.test(clean)) {
+        return callback(null, true)
       }
+      callback(null, false)
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -64,57 +124,47 @@ app.use(express.json({ limit: '2mb' }))
 app.use(cookieParser())
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: true }))
 
-type Role = 'patient' | 'doctor' | 'admin'
-type User = { id: string; name: string; email: string; password: string; role: Role; createdAt: Date }
-type Appointment = { id: string; patientId: string; doctorId: string; date: string; slot: string; status: 'scheduled' | 'cancelled' | 'completed'; notes?: string }
-type Reminder = { id: string; patientId: string; medicineName: string; dosage: string; schedule: string; active: boolean }
-type MedicalRecord = { id: string; patientId: string; title: string; reportType: string; fileUrl?: string; summary?: string; uploadDate: Date }
-type Prescription = { id: string; doctorId: string; doctorName: string; patientId: string; patientName: string; medicineName: string; dosage: string; frequency: string; duration: string; instructions?: string; date: string; status: 'active' | 'completed' }
-type Notification = { id: string; userId: string; title: string; message: string; type: 'appointment' | 'medication' | 'system'; read: boolean; createdAt: Date }
+declare global { namespace Express { interface Request { user?: AuthUser } } }
+const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) => (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res, next)).catch(next)
+const objectId = (value: string) => Types.ObjectId.isValid(value) ? new Types.ObjectId(value) : null
+const publicUser = (user: UserDocument) => ({ id: user._id.toString(), name: user.name, email: user.email, role: user.role, specialty: user.specialty, avatarUrl: user.avatarUrl, createdAt: user.createdAt })
+const serialize = (value: Document & { _id: Types.ObjectId }) => ({ ...value.toObject(), id: value._id.toString(), _id: undefined })
 
-const UserModel = mongoose.model('User', new Schema({ name: String, email: { type: String, unique: true }, password: String, role: { type: String, enum: ['patient', 'doctor', 'admin'], default: 'patient' } }, { timestamps: true }))
-const AppointmentModel = mongoose.model('Appointment', new Schema({ patientId: Schema.Types.ObjectId, doctorId: Schema.Types.ObjectId, date: String, slot: String, status: String, notes: String }, { timestamps: true }))
-
-const memory = {
-  users: [] as User[],
-  appointments: [] as Appointment[],
-  reminders: [] as Reminder[],
-  records: [] as MedicalRecord[],
-  prescriptions: [] as Prescription[],
-  notifications: [] as Notification[],
-}
-
-const id = () => new mongoose.Types.ObjectId().toString()
-const asyncHandler = (fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) =>
-  (req: Request, res: Response, next: NextFunction) => Promise.resolve(fn(req, res, next)).catch(next)
-
-declare global {
-  namespace Express { interface Request { user?: { id: string; role: Role } } }
-}
-
-function tokenFor(user: Pick<User, 'id' | 'role'>) {
-  return jwt.sign({ sub: user.id, role: user.role }, jwtSecret, { expiresIn: '7d' })
-}
-
-function auth(requiredRoles?: Role[]) {
+function auth(roles?: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     const token = req.cookies[cookieName]
     if (!token) return res.status(401).json({ message: 'Authentication required' })
     try {
       const payload = jwt.verify(token, jwtSecret) as { sub: string; role: Role }
-      if (requiredRoles && !requiredRoles.includes(payload.role)) return res.status(403).json({ message: 'Insufficient permissions' })
+      if (roles && !roles.includes(payload.role)) return res.status(403).json({ message: 'Insufficient permissions' })
       req.user = { id: payload.sub, role: payload.role }
       next()
-    } catch { return res.status(401).json({ message: 'Session expired' }) }
+    } catch { res.status(401).json({ message: 'Session expired' }) }
   }
 }
 
-const registerSchema = z.object({ name: z.string().trim().min(2).max(80), email: z.string().email().transform(value => value.toLowerCase()), password: z.string().min(8).max(72), role: z.enum(['patient', 'doctor', 'admin']).optional() })
-const loginSchema = z.object({ email: z.string().email().transform(value => value.toLowerCase()), password: z.string().min(1) })
-const appointmentSchema = z.object({ doctorId: z.string().min(1), date: z.string().min(1), slot: z.string().min(1), notes: z.string().max(500).optional() })
-const reminderSchema = z.object({ medicineName: z.string().min(1).max(120), dosage: z.string().min(1).max(80), schedule: z.string().min(1).max(80) })
-const prescriptionSchema = z.object({
-  patientId: z.string().min(1),
+function setSession(res: Response, user: UserDocument) {
+  res.cookie(cookieName, jwt.sign({ sub: user._id.toString(), role: user.role }, jwtSecret, { expiresIn: '7d' }), { httpOnly: true, sameSite, secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
+}
+
+function requireDatabase(res: Response) {
+  if (mongoose.connection.readyState !== 1) { res.status(503).json({ message: 'Database is unavailable. Configure MONGODB_URI and try again.' }); return false }
+  return true
+}
+
+const registerSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  email: z.string().email().transform(v => v.toLowerCase()),
+  password: z.string().min(8).max(72),
+  role: z.enum(['patient', 'doctor', 'admin']).default('patient'),
+  specialty: z.string().max(100).optional(),
+})
+const loginSchema = z.object({ email: z.string().email().transform(v => v.toLowerCase()), password: z.string().min(1) })
+const appointmentInputSchema = z.object({ doctorId: z.string().refine(v => Types.ObjectId.isValid(v)), date: z.string().min(1), slot: z.string().min(1), notes: z.string().max(1000).optional() })
+const reminderInputSchema = z.object({ medicineName: z.string().min(1).max(120), dosage: z.string().min(1).max(80), schedule: z.string().min(1).max(80) })
+const recordInputSchema = z.object({ title: z.string().min(1).max(120), reportType: z.enum(['Lab result', 'Imaging', 'Prescription', 'Visit note']), fileUrl: z.string().url().optional(), summary: z.string().max(5000).optional() })
+const prescriptionInputSchema = z.object({
+  patientId: z.string().refine(v => Types.ObjectId.isValid(v)),
   medicineName: z.string().min(1).max(120),
   dosage: z.string().min(1).max(80),
   frequency: z.string().min(1).max(80),
@@ -122,150 +172,131 @@ const prescriptionSchema = z.object({
   instructions: z.string().max(500).optional(),
 })
 
-app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'carely-api', database: mongoose.connection.readyState === 1 ? 'mongodb' : 'memory' }))
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'carely-api', database: mongoose.connection.readyState === 1 ? 'mongodb' : 'unavailable' }))
 
+// Auth
 app.post('/api/auth/register', asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
   const input = registerSchema.parse(req.body)
-  const exists = memory.users.find(user => user.email === input.email)
-  if (exists) return res.status(409).json({ message: 'An account with that email already exists' })
-  const user: User = { id: id(), name: input.name, email: input.email, role: input.role || 'patient', password: await bcrypt.hash(input.password, 12), createdAt: new Date() }
-  memory.users.push(user)
+  if (await UserModel.exists({ email: input.email })) return res.status(409).json({ message: 'An account with that email already exists' })
+  const user = await UserModel.create({ ...input, password: await bcrypt.hash(input.password, 12) })
   
-  // Create welcome notification
-  memory.notifications.push({
-    id: id(),
-    userId: user.id,
+  await NotificationModel.create({
+    userId: user._id,
     title: 'Welcome to Carely',
     message: 'Your account is ready. Explore our calm health tools, reminders, and appointments.',
     type: 'system',
     read: false,
-    createdAt: new Date(),
   })
 
-  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: cookieSameSite, secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
-  res.status(201).json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } })
+  setSession(res, user)
+  res.status(201).json({ user: publicUser(user) })
 }))
 
 app.post('/api/auth/login', asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
   const input = loginSchema.parse(req.body)
-  const user = memory.users.find(item => item.email === input.email)
+  const user = await UserModel.findOne({ email: input.email }).select('+password')
   if (!user || !(await bcrypt.compare(input.password, user.password))) return res.status(401).json({ message: 'Invalid email or password' })
-  res.cookie(cookieName, tokenFor(user), { httpOnly: true, sameSite: cookieSameSite, secure: secureCookie, maxAge: 7 * 24 * 60 * 60 * 1000 })
-  res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } })
+  setSession(res, user)
+  res.json({ user: publicUser(user) })
 }))
 
-app.post('/api/auth/logout', (_req, res) => {
-  res.clearCookie(cookieName, { httpOnly: true, sameSite: cookieSameSite, secure: secureCookie })
-  res.status(204).end()
-})
+app.post('/api/auth/logout', (_req, res) => { res.clearCookie(cookieName, { httpOnly: true, sameSite, secure: secureCookie }); res.status(204).end() })
 
-app.get('/api/auth/me', auth(), (req, res) => {
-  const user = memory.users.find(item => item.id === req.user!.id)
+app.get('/api/auth/me', auth(), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const user = await UserModel.findById(req.user!.id)
   if (!user) return res.status(404).json({ message: 'User not found' })
-  res.json({ id: user.id, name: user.name, email: user.email, role: user.role })
-})
+  res.json(publicUser(user))
+}))
 
-app.get('/api/doctors', (_req, res) => res.json({ doctors: memory.users.filter(user => user.role === 'doctor').map(({ password, ...doctor }) => doctor) }))
+// Doctors
+app.get('/api/doctors', asyncHandler(async (_req, res) => {
+  if (!requireDatabase(res)) return
+  const doctors = await UserModel.find({ role: 'doctor' }).sort({ name: 1 })
+  res.json({ doctors: doctors.map(publicUser) })
+}))
 
-app.get('/api/appointments', auth(), (req, res) => {
-  const appointments = memory.appointments.filter(item => req.user!.role === 'doctor' ? item.doctorId === req.user!.id : item.patientId === req.user!.id)
-  res.json({ appointments })
-})
+// Appointments
+app.get('/api/appointments', auth(), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const filter = req.user!.role === 'doctor' ? { doctorId: req.user!.id } : { patientId: req.user!.id }
+  const appointments = await AppointmentModel.find(filter).populate('patientId', 'name email').populate('doctorId', 'name email specialty').sort({ date: 1 })
+  res.json({ appointments: appointments.map(serialize) })
+}))
 
-app.post('/api/appointments', auth(['patient']), (req, res) => {
-  const input = appointmentSchema.parse(req.body)
-  const appointment: Appointment = { id: id(), patientId: req.user!.id, ...input, status: 'scheduled' }
-  memory.appointments.push(appointment)
+app.post('/api/appointments', auth(['patient']), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const input = appointmentInputSchema.parse(req.body)
+  if (!await UserModel.exists({ _id: input.doctorId, role: 'doctor' })) return res.status(404).json({ message: 'Doctor not found' })
+  if (await AppointmentModel.exists({ doctorId: input.doctorId, date: input.date, slot: input.slot, status: 'scheduled' })) return res.status(409).json({ message: 'That time is already booked' })
+  const appointment = await AppointmentModel.create({ ...input, patientId: req.user!.id })
   
-  // Add notification to patient and doctor
-  memory.notifications.push({
-    id: id(),
-    userId: req.user!.id,
-    title: 'Appointment Requested',
-    message: `Your visit for ${appointment.date} at ${appointment.slot} has been requested.`,
-    type: 'appointment',
-    read: false,
-    createdAt: new Date(),
-  })
-  
-  memory.notifications.push({
-    id: id(),
-    userId: appointment.doctorId,
-    title: 'New Patient Booking',
-    message: `A new consultation has been booked for ${appointment.date} at ${appointment.slot}.`,
-    type: 'appointment',
-    read: false,
-    createdAt: new Date(),
-  })
+  // Create notifications
+  await NotificationModel.create([
+    {
+      userId: req.user!.id,
+      title: 'Appointment Requested',
+      message: `Your visit for ${appointment.date} at ${appointment.slot} has been requested.`,
+      type: 'appointment',
+      read: false,
+    },
+    {
+      userId: input.doctorId,
+      title: 'New Patient Booking',
+      message: `A new consultation has been booked for ${appointment.date} at ${appointment.slot}.`,
+      type: 'appointment',
+      read: false,
+    }
+  ])
 
-  res.status(201).json({ appointment })
-})
+  res.status(201).json({ appointment: serialize(appointment) })
+}))
 
-app.patch('/api/appointments/:id/cancel', auth(), (req, res) => {
-  const appointment = memory.appointments.find(item => item.id === req.params.id && (item.patientId === req.user!.id || item.doctorId === req.user!.id))
+app.patch('/api/appointments/:id/cancel', auth(), asyncHandler(async (req, res) => updateAppointmentStatus(req, res, 'cancelled')))
+app.patch('/api/appointments/:id/status', auth(['doctor', 'admin']), asyncHandler(async (req, res) => updateAppointmentStatus(req, res, z.object({ status: z.enum(['scheduled', 'cancelled', 'completed']) }).parse(req.body).status)))
+
+async function updateAppointmentStatus(req: Request, res: Response, status: AppointmentStatus) {
+  if (!requireDatabase(res)) return
+  const id = objectId(String(req.params.id))
+  if (!id) return res.status(400).json({ message: 'Invalid appointment id' })
+  const filter = req.user!.role === 'patient' ? { _id: id, patientId: req.user!.id } : { _id: id, ...(req.user!.role === 'doctor' ? { doctorId: req.user!.id } : {}) }
+  const appointment = await AppointmentModel.findOneAndUpdate(filter, { status }, { new: true })
   if (!appointment) return res.status(404).json({ message: 'Appointment not found' })
-  appointment.status = 'cancelled'
-  
-  memory.notifications.push({
-    id: id(),
-    userId: appointment.patientId,
-    title: 'Appointment Cancelled',
-    message: `Your visit scheduled on ${appointment.date} at ${appointment.slot} has been cancelled.`,
-    type: 'appointment',
-    read: false,
-    createdAt: new Date(),
-  })
+  res.json({ appointment: serialize(appointment) })
+}
 
-  res.json({ appointment })
-})
+// Reminders
+app.get('/api/reminders', auth(['patient']), asyncHandler(async (req, res) => { if (!requireDatabase(res)) return; const reminders = await ReminderModel.find({ patientId: req.user!.id }).sort({ createdAt: -1 }); res.json({ reminders: reminders.map(serialize) }) }))
+app.post('/api/reminders', auth(['patient']), asyncHandler(async (req, res) => { if (!requireDatabase(res)) return; const reminder = await ReminderModel.create({ ...reminderInputSchema.parse(req.body), patientId: req.user!.id }); res.status(201).json({ reminder: serialize(reminder) }) }))
+app.patch('/api/reminders/:id', auth(['patient']), asyncHandler(async (req, res) => { if (!requireDatabase(res)) return; const id = objectId(String(req.params.id)); if (!id) return res.status(400).json({ message: 'Invalid reminder id' }); const reminder = await ReminderModel.findOneAndUpdate({ _id: id, patientId: req.user!.id }, { active: z.boolean().parse(req.body.active) }, { new: true }); if (!reminder) return res.status(404).json({ message: 'Reminder not found' }); res.json({ reminder: serialize(reminder) }) }))
+app.delete('/api/reminders/:id', auth(['patient']), asyncHandler(async (req, res) => { if (!requireDatabase(res)) return; const id = objectId(String(req.params.id)); if (!id) return res.status(400).json({ message: 'Invalid reminder id' }); const result = await ReminderModel.deleteOne({ _id: id, patientId: req.user!.id }); if (!result.deletedCount) return res.status(404).json({ message: 'Reminder not found' }); res.status(204).end() }))
 
-app.get('/api/reminders', auth(['patient']), (req, res) => res.json({ reminders: memory.reminders.filter(item => item.patientId === req.user!.id) }))
+// Medical records
+app.get('/api/records', auth(['patient', 'doctor', 'admin']), asyncHandler(async (req, res) => { if (!requireDatabase(res)) return; const reportType = typeof req.query.type === 'string' ? req.query.type : undefined; const filter = req.user!.role === 'patient' ? { patientId: req.user!.id } : {}; const records = await MedicalRecordModel.find({ ...filter, ...(reportType ? { reportType } : {}) }).sort({ uploadDate: -1 }); res.json({ records: records.map(serialize) }) }))
+app.post('/api/records', auth(['patient', 'doctor']), asyncHandler(async (req, res) => { if (!requireDatabase(res)) return; const input = recordInputSchema.parse(req.body); const patientId = req.user!.role === 'patient' ? req.user!.id : z.string().refine(value => Types.ObjectId.isValid(value)).parse(req.body.patientId); const record = await MedicalRecordModel.create({ ...input, patientId }); res.status(201).json({ record: serialize(record) }) }))
+app.post('/api/records/upload', auth(['patient']), asyncHandler(async (req, res) => { if (!requireDatabase(res)) return; const input = z.object({ title: z.string().min(1).max(120), reportType: z.enum(['Lab result', 'Imaging', 'Prescription', 'Visit note']), filename: z.string().min(1).max(200), summary: z.string().max(5000).optional() }).parse(req.body); const record = await MedicalRecordModel.create({ ...input, fileUrl: `upload://${encodeURIComponent(input.filename)}`, patientId: req.user!.id }); res.status(201).json({ record: serialize(record), upload: 'cloud-storage-ready' }) }))
 
-app.post('/api/reminders', auth(['patient']), (req, res) => {
-  const input = reminderSchema.parse(req.body)
-  const reminder: Reminder = { id: id(), patientId: req.user!.id, ...input, active: true }
-  memory.reminders.push(reminder)
-  res.status(201).json({ reminder })
-})
+// Prescriptions
+app.get('/api/prescriptions', auth(), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const filter = req.user!.role === 'patient' ? { patientId: req.user!.id } : req.user!.role === 'doctor' ? { doctorId: req.user!.id } : {}
+  const prescriptions = await PrescriptionModel.find(filter).sort({ createdAt: -1 })
+  res.json({ prescriptions: prescriptions.map(serialize) })
+}))
 
-app.patch('/api/reminders/:id', auth(['patient']), (req, res) => {
-  const reminder = memory.reminders.find(item => item.id === req.params.id && item.patientId === req.user!.id)
-  if (!reminder) return res.status(404).json({ message: 'Reminder not found' })
-  reminder.active = Boolean(req.body.active)
-  res.json({ reminder })
-})
-
-app.get('/api/records', auth(['patient', 'doctor']), (req, res) => {
-  const records = req.user!.role === 'patient' ? memory.records.filter(item => item.patientId === req.user!.id) : memory.records
-  res.json({ records })
-})
-
-app.post('/api/records', auth(['patient']), (req, res) => {
-  const body = z.object({ title: z.string().min(1).max(120), reportType: z.string().min(1).max(80), fileUrl: z.string().url().optional() }).parse(req.body)
-  const record: MedicalRecord = { id: id(), patientId: req.user!.id, ...body, uploadDate: new Date() }
-  memory.records.push(record)
-  res.status(201).json({ record })
-})
-
-// Prescriptions endpoints
-app.get('/api/prescriptions', auth(), (req, res) => {
-  const prescriptions = req.user!.role === 'patient'
-    ? memory.prescriptions.filter(p => p.patientId === req.user!.id)
-    : memory.prescriptions
-  res.json({ prescriptions })
-})
-
-app.post('/api/prescriptions', auth(['doctor', 'admin']), (req, res) => {
-  const input = prescriptionSchema.parse(req.body)
-  const doctor = memory.users.find(u => u.id === req.user!.id)
-  const patient = memory.users.find(u => u.id === input.patientId)
+app.post('/api/prescriptions', auth(['doctor', 'admin']), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const input = prescriptionInputSchema.parse(req.body)
+  const doctor = await UserModel.findById(req.user!.id)
+  const patient = await UserModel.findById(input.patientId)
   if (!patient) return res.status(404).json({ message: 'Patient not found' })
 
-  const prescription: Prescription = {
-    id: id(),
+  const prescription = await PrescriptionModel.create({
     doctorId: req.user!.id,
     doctorName: doctor?.name || 'Dr. Carely',
-    patientId: patient.id,
+    patientId: patient._id,
     patientName: patient.name,
     medicineName: input.medicineName,
     dosage: input.dosage,
@@ -274,124 +305,176 @@ app.post('/api/prescriptions', auth(['doctor', 'admin']), (req, res) => {
     instructions: input.instructions,
     date: new Date().toISOString().split('T')[0],
     status: 'active',
-  }
-  memory.prescriptions.push(prescription)
+  })
 
-  // Notify patient
-  memory.notifications.push({
-    id: id(),
-    userId: patient.id,
+  // Create patient notification
+  await NotificationModel.create({
+    userId: patient._id,
     title: 'New Prescription Added',
     message: `${prescription.doctorName} prescribed ${prescription.medicineName} (${prescription.dosage}).`,
     type: 'medication',
     read: false,
-    createdAt: new Date(),
   })
 
-  res.status(201).json({ prescription })
-})
+  res.status(201).json({ prescription: serialize(prescription) })
+}))
 
-app.patch('/api/prescriptions/:id', auth(['doctor', 'patient', 'admin']), (req, res) => {
-  const prescription = memory.prescriptions.find(p => p.id === req.params.id)
+app.post('/api/doctor/prescriptions', auth(['doctor']), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const input = z.object({ patientId: z.string().refine(value => Types.ObjectId.isValid(value)), title: z.string().min(1).max(120), summary: z.string().min(1).max(5000) }).parse(req.body)
+  const record = await MedicalRecordModel.create({ patientId: input.patientId, title: input.title, reportType: 'Prescription', summary: input.summary })
+  res.status(201).json({ record: serialize(record) })
+}))
+
+app.patch('/api/prescriptions/:id', auth(['doctor', 'patient', 'admin']), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const id = objectId(String(req.params.id))
+  if (!id) return res.status(400).json({ message: 'Invalid prescription id' })
+  const status = z.enum(['active', 'completed']).parse(req.body.status)
+  const prescription = await PrescriptionModel.findByIdAndUpdate(id, { status }, { new: true })
   if (!prescription) return res.status(404).json({ message: 'Prescription not found' })
-  if (req.body.status && ['active', 'completed'].includes(req.body.status)) {
-    prescription.status = req.body.status
-  }
-  res.json({ prescription })
-})
+  res.json({ prescription: serialize(prescription) })
+}))
 
-// Patients directory endpoint (for doctors and admins)
-app.get('/api/patients', auth(['doctor', 'admin']), (_req, res) => {
-  const patients = memory.users
-    .filter(u => u.role === 'patient')
-    .map(p => {
-      const patientAppointments = memory.appointments.filter(a => a.patientId === p.id)
-      const patientRecords = memory.records.filter(r => r.patientId === p.id)
-      const patientPrescriptions = memory.prescriptions.filter(pr => pr.patientId === p.id)
-      return {
-        id: p.id,
-        name: p.name,
-        email: p.email,
-        createdAt: p.createdAt,
-        totalAppointments: patientAppointments.length,
-        totalRecords: patientRecords.length,
-        totalPrescriptions: patientPrescriptions.length,
-        lastAppointment: patientAppointments[patientAppointments.length - 1]?.date || 'None',
-      }
-    })
-  res.json({ patients })
-})
+// Patients directory
+app.get(['/api/patients', '/api/doctor/patients'], auth(['doctor', 'admin']), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const patients = await UserModel.find({ role: 'patient' }).sort({ createdAt: -1 })
+  const summaries = await Promise.all(patients.map(async p => {
+    const [appointments, records, prescriptions] = await Promise.all([
+      AppointmentModel.find({ patientId: p._id }),
+      MedicalRecordModel.countDocuments({ patientId: p._id }),
+      PrescriptionModel.countDocuments({ patientId: p._id }),
+    ])
+    return {
+      id: p._id.toString(),
+      name: p.name,
+      email: p.email,
+      createdAt: p.createdAt.toISOString(),
+      totalAppointments: appointments.length,
+      totalRecords: records,
+      totalPrescriptions: prescriptions,
+      lastAppointment: appointments[appointments.length - 1]?.date || 'None',
+    }
+  }))
+  res.json({ patients: summaries })
+}))
 
-// User management endpoints (Admin)
-app.get('/api/users', auth(['admin']), (_req, res) => {
-  const users = memory.users.map(({ password, ...u }) => u)
-  res.json({ users })
-})
+// Admin user management
+app.get(['/api/users', '/api/admin/users'], auth(['admin']), asyncHandler(async (_req, res) => {
+  if (!requireDatabase(res)) return
+  const users = await UserModel.find().sort({ createdAt: -1 })
+  res.json({ users: users.map(publicUser) })
+}))
 
-app.patch('/api/users/:id/role', auth(['admin']), (req, res) => {
-  const role = z.enum(['patient', 'doctor', 'admin']).parse(req.body.role)
-  const user = memory.users.find(u => u.id === req.params.id)
+app.patch(['/api/users/:id/role', '/api/admin/users/:id/role'], auth(['admin']), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const role = z.object({ role: z.enum(['patient', 'doctor', 'admin']) }).parse(req.body).role
+  const id = objectId(String(req.params.id))
+  if (!id) return res.status(400).json({ message: 'Invalid user id' })
+  const user = await UserModel.findByIdAndUpdate(id, { role }, { new: true })
   if (!user) return res.status(404).json({ message: 'User not found' })
-  user.role = role
-  res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } })
-})
+  res.json({ user: publicUser(user) })
+}))
 
-app.delete('/api/users/:id', auth(['admin']), (req, res) => {
-  const index = memory.users.findIndex(u => u.id === req.params.id)
-  if (index === -1) return res.status(404).json({ message: 'User not found' })
-  if (memory.users[index].id === req.user!.id) {
-    return res.status(400).json({ message: 'Cannot delete your own admin account' })
-  }
-  memory.users.splice(index, 1)
+app.delete(['/api/users/:id', '/api/admin/users/:id'], auth(['admin']), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const id = objectId(String(req.params.id))
+  if (!id || id.toString() === req.user!.id) return res.status(400).json({ message: 'Invalid user or self-delete is not allowed' })
+  const result = await UserModel.deleteOne({ _id: id })
+  if (!result.deletedCount) return res.status(404).json({ message: 'User not found' })
+  await Promise.all([
+    AppointmentModel.deleteMany({ $or: [{ patientId: id }, { doctorId: id }] }),
+    ReminderModel.deleteMany({ patientId: id }),
+    MedicalRecordModel.deleteMany({ patientId: id }),
+    PrescriptionModel.deleteMany({ $or: [{ patientId: id }, { doctorId: id }] }),
+    NotificationModel.deleteMany({ userId: id }),
+  ])
   res.status(204).end()
-})
+}))
 
-// Notifications endpoints
-app.get('/api/notifications', auth(), (req, res) => {
-  const userNotifications = memory.notifications
-    .filter(n => n.userId === req.user!.id)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-  res.json({ notifications: userNotifications })
-})
+// Notifications
+app.get('/api/notifications', auth(), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const notifications = await NotificationModel.find({ userId: req.user!.id }).sort({ createdAt: -1 }).limit(30)
+  res.json({ notifications: notifications.map(serialize) })
+}))
 
-app.patch('/api/notifications/:id/read', auth(), (req, res) => {
-  const notification = memory.notifications.find(n => n.id === req.params.id && n.userId === req.user!.id)
+app.patch('/api/notifications/:id/read', auth(), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const id = objectId(String(req.params.id))
+  if (!id) return res.status(400).json({ message: 'Invalid notification id' })
+  const notification = await NotificationModel.findOneAndUpdate({ _id: id, userId: req.user!.id }, { read: true }, { new: true })
   if (!notification) return res.status(404).json({ message: 'Notification not found' })
-  notification.read = true
-  res.json({ notification })
-})
+  res.json({ notification: serialize(notification) })
+}))
 
-app.patch('/api/notifications/read-all', auth(), (req, res) => {
-  memory.notifications.forEach(n => {
-    if (n.userId === req.user!.id) n.read = true
-  })
+app.patch('/api/notifications/read-all', auth(), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  await NotificationModel.updateMany({ userId: req.user!.id, read: false }, { read: true })
   res.json({ success: true })
-})
+}))
 
-// Doctor specific dashboard stats
-app.get('/api/doctor/stats', auth(['doctor', 'admin']), (req, res) => {
-  const doctorId = req.user!.id
-  const doctorAppointments = memory.appointments.filter(a => a.doctorId === doctorId)
-  const uniquePatientIds = new Set(doctorAppointments.map(a => a.patientId))
-  const doctorPrescriptions = memory.prescriptions.filter(p => p.doctorId === doctorId)
-  const scheduledCount = doctorAppointments.filter(a => a.status === 'scheduled').length
+// Doctor Stats
+app.get('/api/doctor/stats', auth(['doctor', 'admin']), asyncHandler(async (req, res) => {
+  if (!requireDatabase(res)) return
+  const doctorId = objectId(req.user!.id)
+  const [totalAppointments, scheduledAppointments, completedAppointments, prescriptionsCount] = await Promise.all([
+    AppointmentModel.countDocuments({ doctorId }),
+    AppointmentModel.countDocuments({ doctorId, status: 'scheduled' }),
+    AppointmentModel.countDocuments({ doctorId, status: 'completed' }),
+    PrescriptionModel.countDocuments({ doctorId }),
+  ])
+  const uniquePatients = await AppointmentModel.find({ doctorId }).distinct('patientId')
 
   res.json({
     stats: {
-      appointments: doctorAppointments.length,
-      scheduledAppointments: scheduledCount,
-      patientsCount: uniquePatientIds.size || memory.users.filter(u => u.role === 'patient').length,
-      prescriptionsCount: doctorPrescriptions.length,
-      followUpsCount: Math.max(0, doctorAppointments.filter(a => a.status === 'completed').length),
+      appointments: totalAppointments,
+      scheduledAppointments,
+      patientsCount: uniquePatients.length,
+      prescriptionsCount,
+      followUpsCount: completedAppointments,
     }
   })
-})
+}))
 
-// AI Assistant endpoint with enhanced medical education prompt and structured insights
-app.post('/api/ai/chat', auth(), (req, res) => {
+// Admin Stats
+app.get('/api/admin/stats', auth(['admin']), asyncHandler(async (_req, res) => {
+  if (!requireDatabase(res)) return
+  const [users, doctors, patients, appointments, records, prescriptions] = await Promise.all([
+    UserModel.countDocuments(),
+    UserModel.countDocuments({ role: 'doctor' }),
+    UserModel.countDocuments({ role: 'patient' }),
+    AppointmentModel.countDocuments(),
+    MedicalRecordModel.countDocuments(),
+    PrescriptionModel.countDocuments(),
+  ])
+  res.json({ stats: { users, doctors, patients, appointments, records, prescriptions } })
+}))
+
+// AI Chat
+app.post('/api/ai/chat', auth(), asyncHandler(async (req, res) => {
   const message = z.object({ message: z.string().trim().min(1).max(2000) }).parse(req.body).message
-  const queryLower = message.toLowerCase()
+  const system = 'You are Carely, a compassionate health education assistant. Explain health information clearly without diagnosing, prescribing, or replacing a clinician. Ask clarifying questions when useful. Always recommend professional care for concerning symptoms and emergency services for life-threatening symptoms. Use short headings and bullet points.'
+  
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: message }] }] })
+      })
+      if (response.ok) {
+        const data = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+        const reply = data.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('')
+        if (reply) return res.json({ reply, provider: 'gemini' })
+      }
+    } catch (e) {
+      console.error('Gemini API call failed, using safe fallback', e)
+    }
+  }
 
+  const queryLower = message.toLowerCase()
   let topicHint = 'general health guidance'
   if (queryLower.includes('headache') || queryLower.includes('migraine')) topicHint = 'headaches and symptom tracking'
   else if (queryLower.includes('blood') || queryLower.includes('lab') || queryLower.includes('test')) topicHint = 'understanding laboratory test indicators'
@@ -399,34 +482,23 @@ app.post('/api/ai/chat', auth(), (req, res) => {
   else if (queryLower.includes('vitamin') || queryLower.includes('supplement') || queryLower.includes('medicine')) topicHint = 'medication schedules and adherence'
   else if (queryLower.includes('fever') || queryLower.includes('cold') || queryLower.includes('cough')) topicHint = 'respiratory and seasonal symptom care'
 
-  const structuredResponse = `💡 **Overview regarding ${topicHint}:**
+  const structuredResponse = `💡 Overview regarding ${topicHint}:
 When preparing to speak with your care team about "${message.slice(0, 100)}":
 
-1. **What to Observe & Track:**
+1. What to Observe & Track:
    • Note exactly when symptoms began and their frequency.
    • Record triggers, severity on a 1–10 scale, and anything that brings relief.
    • Keep an up-to-date list of your current medicines, supplements, and allergies.
 
-2. **Suggested Questions for Your Doctor:**
+2. Suggested Questions for Your Doctor:
    • "What potential underlying causes should we evaluate?"
    • "Are there specific lifestyle changes or tests that could give us clearer insight?"
    • "What signs indicate I should follow up sooner or seek urgent evaluation?"
 
-3. **Important Safety Reminder:**
+3. Important Safety Reminder:
    Carely provides health education and visit preparation only; it is not a medical diagnosis or treatment plan. For severe, acute, or rapidly worsening symptoms (chest pain, shortness of breath, sudden numbness), please seek emergency medical attention immediately.`
 
-  res.json({ reply: structuredResponse })
-})
-
-app.get('/api/admin/stats', auth(['admin']), (_req, res) => res.json({
-  stats: {
-    users: memory.users.length,
-    doctors: memory.users.filter(user => user.role === 'doctor').length,
-    appointments: memory.appointments.length,
-    records: memory.records.length,
-    prescriptions: memory.prescriptions.length,
-    patients: memory.users.filter(user => user.role === 'patient').length,
-  }
+  res.json({ reply: structuredResponse, provider: 'safe-fallback' })
 }))
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -435,87 +507,23 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ message: 'Unexpected server error' })
 })
 
+async function seed() {
+  const password = await bcrypt.hash(process.env.DEMO_PASSWORD ?? 'CarelyDemo123!', 12)
+  for (const doctor of [
+    { name: 'Dr. Amara Patel', email: 'doctor@carely.com', specialty: 'General medicine' },
+    { name: 'Dr. Noah Chen', email: 'specialist@carely.com', specialty: 'Cardiology' }
+  ]) {
+    await UserModel.updateOne({ email: doctor.email }, { $setOnInsert: { ...doctor, password, role: 'doctor' } }, { upsert: true })
+  }
+  await UserModel.updateOne({ email: 'admin@carely.com' }, { $setOnInsert: { name: 'Carely Admin', email: 'admin@carely.com', password, role: 'admin' } }, { upsert: true })
+}
+
 async function start() {
   if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) throw new Error('JWT_SECRET must be set to at least 32 characters in production')
-  if (isProduction && !process.env.MONGODB_URI) throw new Error('MONGODB_URI must be configured in production')
-  if (process.env.MONGODB_URI) {
-    try { await mongoose.connect(process.env.MONGODB_URI); console.log('Connected to MongoDB') }
-    catch (error) { console.error('MongoDB connection failed; using memory store', error) }
-  }
-
-  // Pre-seed mock data if in memory mode
-  if (memory.users.length === 0) {
-    const passwordHash = await bcrypt.hash('development-only-password', 12)
-    const demoDoctor: User = { id: id(), name: 'Dr. Amara Patel', email: 'amara.patel@carely.example', password: passwordHash, role: 'doctor', createdAt: new Date() }
-    const demoDoctor2: User = { id: id(), name: 'Dr. Marcus Vance', email: 'marcus.vance@carely.example', password: passwordHash, role: 'doctor', createdAt: new Date() }
-    const demoPatient: User = { id: id(), name: 'Maya Reynolds', email: 'maya@carely.example', password: passwordHash, role: 'patient', createdAt: new Date() }
-    const demoAdmin: User = { id: id(), name: 'Platform Admin', email: 'admin@carely.example', password: passwordHash, role: 'admin', createdAt: new Date() }
-    
-    memory.users.push(demoDoctor, demoDoctor2, demoPatient, demoAdmin)
-
-    memory.appointments.push({
-      id: id(),
-      patientId: demoPatient.id,
-      doctorId: demoDoctor.id,
-      date: '2025-04-12',
-      slot: '10:00 AM',
-      status: 'scheduled',
-      notes: 'Routine health check-up and vitals review.',
-    })
-
-    memory.reminders.push(
-      { id: id(), patientId: demoPatient.id, medicineName: 'Vitamin D3', dosage: '1000 IU', schedule: '8:00 AM', active: true },
-      { id: id(), patientId: demoPatient.id, medicineName: 'Omega-3', dosage: '500 mg', schedule: '1:00 PM', active: true },
-      { id: id(), patientId: demoPatient.id, medicineName: 'Magnesium Glycinate', dosage: '200 mg', schedule: '9:30 PM', active: false }
-    )
-
-    memory.records.push(
-      { id: id(), patientId: demoPatient.id, title: 'Annual Comprehensive Metabolic Panel', reportType: 'Lab result', uploadDate: new Date() },
-      { id: id(), patientId: demoPatient.id, title: 'Cardiology Consultation Note', reportType: 'Visit note', uploadDate: new Date() }
-    )
-
-    memory.prescriptions.push(
-      {
-        id: id(),
-        doctorId: demoDoctor.id,
-        doctorName: demoDoctor.name,
-        patientId: demoPatient.id,
-        patientName: demoPatient.name,
-        medicineName: 'Amoxicillin',
-        dosage: '500 mg',
-        frequency: 'Three times daily with meals',
-        duration: '7 days',
-        instructions: 'Complete full course of antibiotics even if feeling better.',
-        date: '2025-04-01',
-        status: 'active',
-      }
-    )
-
-    memory.notifications.push(
-      {
-        id: id(),
-        userId: demoPatient.id,
-        title: 'Appointment Confirmed',
-        message: 'Your appointment with Dr. Amara Patel on 2025-04-12 at 10:00 AM is confirmed.',
-        type: 'appointment',
-        read: false,
-        createdAt: new Date(),
-      },
-      {
-        id: id(),
-        userId: demoPatient.id,
-        title: 'Medication Routine',
-        message: 'Remember to take Vitamin D3 (1000 IU) this morning.',
-        type: 'medication',
-        read: true,
-        createdAt: new Date(),
-      }
-    )
-    console.log('Seeded demo users: Dr. Amara Patel, Maya Reynolds, Platform Admin')
-  }
-
+  if (!process.env.MONGODB_URI) throw new Error('MONGODB_URI must be configured; Carely requires a database connection')
+  await mongoose.connect(process.env.MONGODB_URI)
+  await seed()
   app.listen(port, () => console.log(`Carely API listening on http://localhost:${port}`))
 }
 
 start().catch(error => { console.error(error); process.exit(1) })
-
